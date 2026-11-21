@@ -1,0 +1,3 @@
+#!/bin/bash
+# boat-keep: boat runs this on boat stop and auto-stop, before the last snapshot.
+sudo -n /usr/local/sbin/boat-keep-agent checkpoint

@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+# boat-keep agent. Runs on the sandbox as root, from boat-keep.service.
+#
+#   restore      restore the last checkpoint unless its processes are running (at boot)
+#   checkpoint   checkpoint the kept process tree; it keeps running (and at shutdown)
+#   loop         checkpoint every $INTERVAL s, for stops nobody announces (power-cycle, auto-stop)
+#   status       what is kept, and how the last boot went
+#   wait-disk    wait until boat has moved the disk in on a fork or new sandbox
+#
+# Settings in /etc/boat-keep.conf: KEEP_USER (user), ROOT (the tree's root process name,
+# 'tmux: server'), INTERVAL (300).
+set -euo pipefail
+
+STATE=/var/lib/boat-keep
+KEEP_USER=user
+ROOT='tmux: server'
+INTERVAL=300
+# shellcheck disable=SC1091
+[ -f /etc/boat-keep.conf ] && . /etc/boat-keep.conf
+UNIT_CGROUP=/sys/fs/cgroup/system.slice/boat-keep.service
+
+log() { printf 'boat-keep: %s\n' "$*" >&2; }
+mkdir -p "$STATE"
+lock() { exec 9>"$STATE/lock"; flock 9; }
+boot_id() { cat /proc/sys/kernel/random/boot_id; }
+
+tree() { # the pid and all its descendants
+  echo "$1"
+  local c
+  for c in $(cat /proc/"$1"/task/*/children 2>/dev/null); do tree "$c"; done
+}
+
+# CRIU can't checkpoint the tmux server while a client outside it is connected. Each attached
+# client detaches and re-attaches itself 2 s later; the checkpoint fits in between.
+release_tmux_clients() {
+  [ "$ROOT" = 'tmux: server' ] || return 0
+  local t=(runuser -u "$KEEP_USER" -- tmux) c s _
+  "${t[@]}" list-clients -F '#{client_name} #{session_name}' 2>/dev/null | while read -r c s; do
+    "${t[@]}" detach-client -t "$c" -E "sleep 2; exec tmux attach -t '$s'" 2>/dev/null || true
+  done
+  for _ in $(seq 20); do
+    [ -z "$("${t[@]}" list-clients 2>/dev/null)" ] && return 0
+    sleep 0.05
+  done
+}
+
+checkpoint() {
+  lock
+  local root
+  if ! root=$(pgrep -xo -u "$KEEP_USER" "$ROOT"); then
+    # Nothing to keep now, so a reboot or fork shouldn't bring back an old one either.
+    rm -f "$STATE/current"
+    log "no '$ROOT' running for $KEEP_USER: nothing to keep"
+    return 0
+  fi
+  local pids bad="" p
+  pids=$(tree "$root")
+  for p in $pids; do
+    if ls -l /proc/"$p"/fd 2>/dev/null | grep -q io_uring; then
+      bad="$bad $p($(tr '\0' ' ' < /proc/"$p"/cmdline | cut -c1-40 | sed 's/ $//'))"
+    fi
+  done
+  if [ -n "$bad" ]; then
+    log "these processes use io_uring, which CRIU can't checkpoint:$bad"
+    log "they started before boat-keep setup turned io_uring off: restart them"
+    return 3
+  fi
+  # Files open in the retired lazy-disk view (see wait_for_lazy_disk) don't exist on any later boot.
+  for p in $pids; do
+    if { ls -l /proc/"$p"/fd /proc/"$p"/cwd; cat /proc/"$p"/maps; } 2>/dev/null | grep -q /var/lib/ascii-lazy/; then
+      bad="$bad $p($(tr '\0' ' ' < /proc/"$p"/cmdline | cut -c1-40 | sed 's/ $//'))"
+    fi
+  done
+  if [ -n "$bad" ]; then
+    log "these processes started while boat was still moving the disk in, and use files no later boot has:$bad"
+    log "restart them"
+    return 3
+  fi
+  # Move the tree into this service, so at shutdown systemd checkpoints it before killing it.
+  if [ -d "$UNIT_CGROUP" ]; then
+    for p in $pids; do
+      grep -q '/boat-keep.service$' /proc/"$p"/cgroup 2>/dev/null || echo "$p" > "$UNIT_CGROUP/cgroup.procs" 2>/dev/null || true
+    done
+  fi
+
+  release_tmux_clients
+
+  local name dir
+  name=img-$(date +%s%N)
+  dir=$STATE/$name
+  mkdir "$dir"
+  # Folders holding the tree's unix sockets (/tmp/tmux-1000) are gone after a boot.
+  local inodes ino
+  inodes=$(for p in $pids; do ls -l /proc/"$p"/fd 2>/dev/null; done | sed -n 's/.*socket:\[\([0-9]*\)\]/\1/p' | sort -u)
+  for ino in $inodes; do
+    awk -v i="$ino" '$7 == i && $8 ~ /^\// {print $8}' /proc/net/unix
+  done | xargs -r -n1 dirname | sort -u | while read -r d; do
+    stat -c '%a %u %g %n' "$d"
+  done > "$dir/dirs"
+  if ! criu dump -t "$root" -D "$dir" -o dump.log --leave-running \
+      --tcp-established --ext-unix-sk --file-locks; then
+    tail -4 "$dir/dump.log" >&2
+    rm -rf "$dir"
+    return 4
+  fi
+  {
+    printf 'ROOT_PID=%s\n' "$root"
+    printf 'ROOT_COMM=%q\n' "$(cat /proc/"$root"/comm)"
+    printf 'COUNT=%s\n' "$(echo "$pids" | wc -l | tr -d ' ')"
+    printf 'BOOT_ID=%s\n' "$(boot_id)"
+    printf 'TAKEN=%s\n' "$(date +%s)"
+  } > "$dir/meta"
+  sync -f "$dir/meta"
+  # Switch with one rename, so a snapshot taken meanwhile holds a whole checkpoint.
+  ln -sfn "$name" "$STATE/current.new"
+  mv -T "$STATE/current.new" "$STATE/current"
+  sync -f "$STATE"
+  find "$STATE" -maxdepth 1 -name 'img-*' ! -name "$name" -exec rm -rf {} +
+  log "checkpointed $(echo "$pids" | wc -l | tr -d ' ') processes under pid $root ($(du -sh "$dir" | cut -f1))"
+}
+
+# A fork or `boat new --from` boots with /home/user, /usr, /etc, ... served lazily over FUSE while
+# boat copies them in, then swaps in the real disk and moves the FUSE view aside
+# (/var/lib/ascii-lazy/retired). A process restored before the swap keeps its files open in the
+# retired view: its writes are lost and the next checkpoint records paths no later fork has.
+# So on such a boot, wait until every lazily served path is on the real disk.
+wait_for_lazy_disk() {
+  local roots=/var/lib/ascii-lazy/fuse-roots btime _ p lazy
+  [ -f "$roots" ] || return 0
+  btime=$(awk '/^btime/ {print $2}' /proc/stat)
+  [ "$(stat -c %Y "$roots")" -ge "$btime" ] || return 0
+  for _ in $(seq 240); do
+    lazy=""
+    for p in $(cut -f2 "$roots"); do
+      case "$(findmnt -n -o FSTYPE -T "$p" 2>/dev/null)" in fuse*) lazy="$lazy $p" ;; esac
+    done
+    [ -z "$lazy" ] && return 0
+    sleep 0.5
+  done
+  log "still served lazily after 120 s:$lazy; restoring anyway"
+}
+
+# CRIU restores processes with their own PIDs, so a kept PID must be free when restore runs.
+# Early boot uses a few thousand PIDs, and how many varies, so a kept process with a low PID
+# can find it taken on a fork or after a reboot. From setup on, and after each boot's restore,
+# new PIDs count up from 1,000,000, where no boot reaches.
+KEEP_PIDS_FROM=1000000
+raise_pid_counter() {
+  [ "$(cat /proc/sys/kernel/pid_max)" -gt $((KEEP_PIDS_FROM * 2)) ] || sysctl -q -w kernel.pid_max=4194304
+  [ "$(cat /proc/sys/kernel/ns_last_pid)" -ge "$KEEP_PIDS_FROM" ] || echo "$KEEP_PIDS_FROM" > /proc/sys/kernel/ns_last_pid
+}
+
+restore() {
+  lock
+  local rc=0
+  restore_tree || rc=$?
+  raise_pid_counter
+  return "$rc"
+}
+
+restore_tree() {
+  if [ ! -e "$STATE/current/meta" ]; then
+    echo "nothing to restore" > "$STATE/last-boot"
+    log "no checkpoint"
+    return 0
+  fi
+  local dir ROOT_PID ROOT_COMM TAKEN
+  dir=$(readlink -f "$STATE/current")
+  # shellcheck disable=SC1091
+  . "$dir/meta"
+  if [ "$(cat /proc/"$ROOT_PID"/comm 2>/dev/null)" = "$ROOT_COMM" ]; then
+    echo "already running (warm), nothing restored" > "$STATE/last-boot"
+    log "pid $ROOT_PID ($ROOT_COMM) is running: nothing to restore"
+    return 0
+  fi
+  wait_for_lazy_disk
+  sysctl -q -w kernel.io_uring_disabled=2
+  local mode uid gid d
+  while read -r mode uid gid d; do
+    install -d -m "$mode" -o "$uid" -g "$gid" "$d"
+  done < "$dir/dirs"
+  # Open TCP connections come back closed: their peers or this machine's address may be gone.
+  if ! criu restore -D "$dir" -o restore.log -d --tcp-established --tcp-close \
+      --ext-unix-sk --file-locks --manage-cgroups=ignore; then
+    tail -4 "$dir/restore.log" >&2
+    echo "restore FAILED, see $dir/restore.log" > "$STATE/last-boot"
+    return 4
+  fi
+  echo "restored $COUNT processes from a checkpoint $(( $(date +%s) - TAKEN ))s old" > "$STATE/last-boot"
+  log "restored $COUNT processes under pid $ROOT_PID"
+}
+
+status() {
+  if [ -e "$STATE/current/meta" ]; then
+    local ROOT_PID ROOT_COMM COUNT TAKEN
+    # shellcheck disable=SC1091
+    . "$STATE/current/meta"
+    local state=stopped
+    [ "$(cat /proc/"$ROOT_PID"/comm 2>/dev/null)" = "$ROOT_COMM" ] && state=running
+    echo "kept: $ROOT_COMM pid $ROOT_PID, $COUNT processes, $state; checkpoint $(( $(date +%s) - TAKEN ))s old"
+  else
+    echo "kept: nothing"
+  fi
+  echo "this boot: $(cat "$STATE/last-boot" 2>/dev/null || echo unknown)"
+}
+
+loop() {
+  # Subshells: each checkpoint takes and drops the lock, so a shutdown checkpoint never waits on a sleep.
+  while sleep "$INTERVAL"; do (checkpoint) || log "checkpoint failed"; done
+}
+
+case "${1:-}" in
+  loop|checkpoint|restore|status) "$1" ;;
+  wait-disk) wait_for_lazy_disk ;;
+  raise-pids) raise_pid_counter ;;
+  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac

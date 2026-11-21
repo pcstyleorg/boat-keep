@@ -1,0 +1,21 @@
+[Unit]
+Description=boat-keep: keep running processes across fork, stop, reboot
+# Restore before anyone logs in and starts processes that could take the kept PIDs.
+After=network.target
+Before=ssh.service systemd-user-sessions.service
+
+[Service]
+Type=exec
+# Restored processes stay in this unit's cgroup; so does a tree a checkpoint adopts.
+ExecStartPre=-/usr/local/sbin/boat-keep-agent restore
+ExecStart=/usr/local/sbin/boat-keep-agent loop
+# At shutdown, checkpoint the tree. It lives in this unit's cgroup, so this runs before the
+# user's session (where the tree started) is torn down.
+ExecStop=/usr/local/sbin/boat-keep-agent checkpoint
+# Stopping the service never kills the kept processes; at shutdown they go with everything else.
+KillMode=process
+TimeoutStartSec=300
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

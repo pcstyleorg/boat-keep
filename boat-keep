@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# boat-keep: keep a boat sandbox's running processes across fork, stop, reboot and resize.
+#
+#   boat-keep setup <id>                      install CRIU and the boat-keep service on the sandbox
+#   boat-keep fork <id> [-- <boat fork opts>] fork with the processes (--type large resizes)
+#   boat-keep stop <id>                       checkpoint, then boat stop
+#   boat-keep resume <id>                     boat resume; a cold resume restores the processes
+#   boat-keep resize <id> <size>              stop, resume at small|default|large|xlarge, restore
+#   boat-keep save <id> <name>                checkpoint, then boat snapshot (for boat new --from)
+#   boat-keep checkpoint <id>                 checkpoint now
+#   boat-keep status <id>                     what is kept, and how the last boot went
+#
+# On the sandbox, boat-keep.service restores the processes at every boot (fork, reboot, cold
+# resume, boat new --from), checkpoints them at shutdown, and every 5 minutes for stops nobody
+# announces (a kernel crash, boat stop --force). It keeps the tmux server of user `user` and everything in it.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+log() { printf 'boat-keep: %s\n' "$*" >&2; }
+die() { log "$*"; exit 1; }
+
+agent() { local id=$1; shift; boat ssh "$id" "sudo /usr/local/sbin/boat-keep-agent $*"; }
+
+# The first JSON line with this field, at the top level or under "sandbox".
+json_field() { python3 -c "import json,sys
+for line in sys.stdin:
+    try: d = json.loads(line)
+    except ValueError: continue
+    d = d if '$1' in d else d.get('sandbox') or {}
+    if '$1' in d: print(d['$1']); break"; }
+
+state() { boat info "$1" --json | json_field state; }
+
+wait_stopped() {
+  local _
+  for _ in $(seq 90); do [ "$(state "$1")" = stopped ] && return 0; sleep 2; done
+  die "$1 didn't stop"
+}
+
+# Until the boat-keep service has finished its boot restore, then print its status.
+wait_kept() {
+  local _
+  for _ in $(seq 60); do
+    # boat ssh prints its errors on stdout, and is-active fails while the boot restore runs.
+    if boat ssh "$1" 'systemctl is-active -q boat-keep' >/dev/null 2>&1; then
+      agent "$1" status | sed "s/^/$1: /" >&2
+      return 0
+    fi
+    sleep 2
+  done
+  die "boat-keep didn't start on $1: boat ssh $1 journalctl -u boat-keep"
+}
+
+checkpoint() { agent "$1" checkpoint || die "checkpoint failed on $1"; }
+
+cmd=${1:-}; shift || true
+case "$cmd" in
+  setup)
+    [ $# -eq 1 ] || die "usage: boat-keep setup <id>"
+    COPYFILE_DISABLE=1 tar --no-xattrs -C "$HERE/agent" -cf - . \
+      | boat ssh "$1" 'd=$(mktemp -d) && tar -xf - -C "$d" && sudo bash "$d/install.sh" "$d"' \
+      | sed 's/^/boat-keep: /' >&2 || die "setup failed on $1"
+    log "keeps $1's tmux server and everything in it; start your processes in tmux after setup"
+    ;;
+  checkpoint) [ $# -eq 1 ] || die "usage: boat-keep checkpoint <id>"; checkpoint "$1" ;;
+  status) [ $# -eq 1 ] || die "usage: boat-keep status <id>"; agent "$1" status ;;
+  stop)
+    [ $# -eq 1 ] || die "usage: boat-keep stop <id>"
+    checkpoint "$1"
+    boat stop "$1" --json >/dev/null
+    wait_stopped "$1"
+    log "stopped $1"
+    ;;
+  resume)
+    [ $# -eq 1 ] || die "usage: boat-keep resume <id>"
+    boat resume "$1" --json >/dev/null
+    wait_kept "$1"
+    ;;
+  resize)
+    [ $# -eq 2 ] || die "usage: boat-keep resize <id> <small|default|large|xlarge>"
+    checkpoint "$1"
+    boat stop "$1" --json >/dev/null
+    wait_stopped "$1"
+    boat resume "$1" --type "$2" --json >/dev/null || die "boat resume --type $2 failed; $1 is stopped: boat resume $1"
+    wait_kept "$1"
+    ;;
+  save)
+    [ $# -eq 2 ] || die "usage: boat-keep save <id> <name>"
+    checkpoint "$1"
+    log "saving snapshot $2 (takes about 2 minutes)"
+    boat snapshot "$1" "$2" --json >/dev/null
+    log "saved: boat new --from $2 starts with these processes"
+    ;;
+  fork)
+    id=${1:-}; [ -n "$id" ] || die "usage: boat-keep fork <id> [-- <boat fork options>]"; shift
+    [ "${1:-}" = -- ] && shift
+    t0=$SECONDS
+    checkpoint "$id"
+    # A fork comes from the latest snapshot; stopping takes one at once (boat snapshot takes ~2 min).
+    boat stop "$id" --json >/dev/null
+    wait_stopped "$id"
+    fork=$(boat fork "$id" "$@" --json | json_field id)
+    boat resume "$id" --json >/dev/null || log "couldn't resume $id: run boat resume $id"
+    [ -n "$fork" ] || die "boat fork failed"
+    wait_kept "$fork"
+    wait_kept "$id"
+    log "done in $((SECONDS - t0))s"
+    echo "$fork"
+    ;;
+  *)
+    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' >&2
+    exit 2
+    ;;
+esac
