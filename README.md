@@ -14,7 +14,7 @@ boat ssh -t "$fork" tmux attach
 ## Install
 
 ```sh
-git clone https://github.com/pc-style/boat-keep
+git clone https://github.com/pcstyleorg/boat-keep
 ln -s "$PWD/boat-keep/boat-keep" /usr/local/bin/boat-keep   # or any folder on your PATH
 boat-keep setup <sandbox-id>
 ```

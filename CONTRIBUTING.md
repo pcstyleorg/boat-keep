@@ -4,7 +4,7 @@ Thanks for helping. boat-keep is meant to stay small: a bash CLI on your laptop,
 
 ## Reporting a bug
 
-Open a [bug report](https://github.com/pc-style/boat-keep/issues/new?template=bug_report.yml). The most useful things to include:
+Open a [bug report](https://github.com/pcstyleorg/boat-keep/issues/new?template=bug_report.yml). The most useful things to include:
 
 - the command you ran and the event (fork, stop, resume, reboot, resize, auto-stop, `boat new --from`)
 - `boat-keep status <id>` from the sandbox that lost its processes
@@ -15,7 +15,7 @@ Security problems go through [SECURITY.md](SECURITY.md), not the issue tracker.
 
 ## Proposing a feature
 
-Open a [feature request](https://github.com/pc-style/boat-keep/issues/new?template=feature_request.yml) first for anything bigger than a small fix, so we can agree on the shape before you write it.
+Open a [feature request](https://github.com/pcstyleorg/boat-keep/issues/new?template=feature_request.yml) first for anything bigger than a small fix, so we can agree on the shape before you write it.
 
 ## Pull requests
 

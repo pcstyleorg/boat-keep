@@ -1,5 +1,5 @@
 blank_issues_enabled: true
 contact_links:
   - name: Report a security problem
-    url: https://github.com/pc-style/boat-keep/security/advisories/new
+    url: https://github.com/pcstyleorg/boat-keep/security/advisories/new
     about: Report it privately, not in a public issue.

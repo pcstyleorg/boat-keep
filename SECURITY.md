@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Report it privately through [GitHub's private vulnerability reporting](https://github.com/pc-style/boat-keep/security/advisories/new), not in a public issue or pull request. Include what an attacker could do, the steps to reproduce, and the boat-keep commit you tested.
+Report it privately through [GitHub's private vulnerability reporting](https://github.com/pcstyleorg/boat-keep/security/advisories/new), not in a public issue or pull request. Include what an attacker could do, the steps to reproduce, and the boat-keep commit you tested.
 
 You'll get an answer within 7 days. Once a fix is out, the advisory is published with credit to you unless you'd rather stay anonymous.
 
