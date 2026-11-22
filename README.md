@@ -20,6 +20,8 @@ boat-keep setup <sandbox-id>
 
 The installer puts the files in `~/.local/share/boat-keep` and `boat-keep` in `~/.local/bin` (change them with `BOAT_KEEP_DIR` and `BOAT_KEEP_BIN`); run it again to update. `setup` installs CRIU and the service on that one sandbox; forks and snapshots of it already have them.
 
+Or from npm: `npm i -g boat-keep` (or `bunx boat-keep <command>` without installing).
+
 From a clone instead: `ln -s "$PWD/boat-keep/boat-keep" ~/.local/bin/boat-keep`. It finds its `agent/` folder through the symlink, so keep the clone.
 
 ## Requirements
