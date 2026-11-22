@@ -1,21 +1,13 @@
 # Security
 
-## Reporting a vulnerability
+Report vulnerabilities [privately on GitHub](https://github.com/pcstyleorg/boat-keep/security/advisories/new), not in a public issue. Say what an attacker could do, how to reproduce it, and which commit you tested. You'll hear back within 7 days, and you get credit in the advisory unless you'd rather not.
 
-Report it privately through [GitHub's private vulnerability reporting](https://github.com/pcstyleorg/boat-keep/security/advisories/new), not in a public issue or pull request. Include what an attacker could do, the steps to reproduce, and the boat-keep commit you tested.
+Bugs in boat itself go to boat. Bugs in CRIU go to [CRIU](https://github.com/checkpoint-restore/criu/security).
 
-You'll get an answer within 7 days. Once a fix is out, the advisory is published with credit to you unless you'd rather stay anonymous.
+## Good to know
 
-Problems in boat.dev itself go to boat, and problems in CRIU go to the [CRIU project](https://github.com/checkpoint-restore/criu/security).
+- Saved checkpoints contain your processes' memory, secrets and tokens included. They're stored under `/var/lib/boat-keep`, owned by root. Anyone with access to the sandbox, or a fork or snapshot of it, can read them, just like the rest of the disk.
+- The agent runs as root. The `~/.boat/pre-stop` hook calls it with `sudo -n`, using the passwordless sudo boat sandboxes already have. Setup doesn't add sudo rules.
+- The laptop script only runs `boat` commands. It doesn't send anything anywhere else.
 
-## What boat-keep trusts
-
-boat-keep runs as root on your sandbox and handles copies of your processes' memory, so these are worth knowing before you report:
-
-- Checkpoints contain everything your kept processes had in memory, including secrets and tokens. They live on the sandbox disk under `/var/lib/boat-keep`, owned by root. Anyone who can use the sandbox, or a fork or snapshot of it, can read them, the same way they can read the rest of the disk.
-- `setup` installs `/usr/local/sbin/boat-keep-agent` and a `~/.boat/pre-stop` hook that runs it with `sudo -n`. It adds no sudo rules: it relies on the passwordless sudo boat sandboxes already give user `user`.
-- The laptop CLI only runs `boat` commands; it sends nothing anywhere else.
-
-## Supported versions
-
-Only the latest commit on `main` gets fixes.
+Only the latest `main` gets fixes.
