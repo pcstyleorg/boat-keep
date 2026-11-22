@@ -11,6 +11,21 @@ fork=$(boat-keep fork bx_123)          # ~15 s; the fork has the same tmux, shel
 boat ssh -t "$fork" tmux attach
 ```
 
+## Install
+
+```sh
+git clone https://github.com/pc-style/boat-keep
+ln -s "$PWD/boat-keep/boat-keep" /usr/local/bin/boat-keep   # or any folder on your PATH
+boat-keep setup <sandbox-id>
+```
+
+`boat-keep` finds its `agent/` folder through the symlink, so keep the clone. `setup` installs CRIU and the service on that one sandbox; forks and snapshots of it already have them.
+
+## Requirements
+
+- **Laptop:** macOS or Linux with bash, python3, and the [boat CLI](https://boat.dev), logged in.
+- **Sandbox:** a boat sandbox on its default Ubuntu image (setup uses passwordless sudo and installs CRIU 4.x from `ppa:criu/ppa`). Your processes run inside tmux as user `user`, started after `setup`.
+
 ## What it keeps
 
 The tmux server of user `user` and every process in it. Change that in `/etc/boat-keep.conf` (`KEEP_USER`, `ROOT`, `INTERVAL`).
@@ -63,3 +78,11 @@ All 16 scenarios pass on real sandboxes: [test/RESULTS.md](test/RESULTS.md), fro
 - `test/`: the end-to-end test and its last results
 - `FINDINGS.md`: notes from the first CRIU probe
 - `reel/`: the demo video and the scene it's rendered from
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). Report security problems privately, as [SECURITY.md](SECURITY.md) describes.
+
+## License
+
+[MIT](LICENSE)

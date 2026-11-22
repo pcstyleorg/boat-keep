@@ -56,6 +56,8 @@ checkpoint() {
   local pids bad="" p
   pids=$(tree "$root")
   for p in $pids; do
+    # fd names are numbers; ls -l shows where each points, such as anon_inode:[io_uring].
+    # shellcheck disable=SC2010
     if ls -l /proc/"$p"/fd 2>/dev/null | grep -q io_uring; then
       bad="$bad $p($(tr '\0' ' ' < /proc/"$p"/cmdline | cut -c1-40 | sed 's/ $//'))"
     fi

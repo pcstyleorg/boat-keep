@@ -22,6 +22,7 @@ systemctl enable -q --now boat-keep
 # before the last snapshot) and nothing else.
 hook=/home/user/.boat/pre-stop
 if [ -e "$hook" ] && ! grep -q boat-keep "$hook"; then
+  # shellcheck disable=SC2088 # a literal ~ for the reader
   echo "~/.boat/pre-stop is yours, so it was left alone. Add this line to it:"
   echo "  sudo -n /usr/local/sbin/boat-keep-agent checkpoint"
 else

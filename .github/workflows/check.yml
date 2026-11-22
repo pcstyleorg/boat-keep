@@ -1,0 +1,28 @@
+# Static checks only. The end-to-end test (test/run.sh) needs a boat account and costs money, so it
+# runs by hand. Jobs run on Luxor runners, not GitHub-hosted ones.
+name: check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shell:
+    runs-on: luxor-ubuntu-small-2c-4g
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n
+        run: bash -n boat-keep agent/boat-keep-agent agent/install.sh agent/pre-stop test/run.sh
+      - name: shellcheck
+        run: |
+          command -v shellcheck >/dev/null || { sudo apt-get update -q && sudo apt-get install -yq shellcheck; }
+          shellcheck -S warning boat-keep agent/boat-keep-agent agent/install.sh agent/pre-stop test/run.sh

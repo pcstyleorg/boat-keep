@@ -1,0 +1,63 @@
+name: Bug report
+description: Processes didn't come back, a command failed, or setup broke.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected to come back, and what you got instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: event
+    attributes:
+      label: Event
+      options:
+        - boat-keep fork
+        - boat-keep fork to another size
+        - boat-keep resize
+        - boat-keep stop / resume
+        - plain boat stop / resume
+        - plain boat fork
+        - auto-stop
+        - reboot inside the sandbox
+        - kernel crash or boat stop --force
+        - boat-keep save + boat new --from
+        - boat-keep setup
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The commands you ran, in order.
+      render: sh
+    validations:
+      required: true
+  - type: textarea
+    id: kept
+    attributes:
+      label: What was running in tmux
+      description: For example node 24 dev server, python, postgres, an agent.
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: boat-keep status
+      description: "`boat-keep status <id>` on the sandbox that lost its processes."
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Service log
+      description: "`boat ssh <id> 'journalctl -u boat-keep --no-pager | tail -100'`. Remove anything secret first."
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: boat-keep commit (`git rev-parse --short HEAD`), `boat --version`, sandbox size.
+      placeholder: "abc1234, boat 1.2.3, small"
