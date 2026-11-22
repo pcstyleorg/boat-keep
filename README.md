@@ -77,7 +77,6 @@ All 16 scenarios pass on real sandboxes: [test/RESULTS.md](test/RESULTS.md), fro
 - `agent/`: what `setup` installs on the sandbox
 - `test/`: the end-to-end test and its last results
 - `FINDINGS.md`: notes from the first CRIU probe
-- `reel/`: the demo video and the scene it's rendered from
 
 ## Contributing
 

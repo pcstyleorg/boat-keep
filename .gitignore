@@ -2,12 +2,5 @@
 node_modules/
 stills/
 .render-lock/
-# earlier reel attempts, kept locally only
-reel/b/
-reel/c/
-reel/mocks/
-reel/scene.html
-reel/render.ts
-reel/shot.ts
-reel/boat-keep-reel.mp4
-reel/story/board.png
+# demo videos and the tooling that renders them, kept locally only
+reel/
