@@ -2,7 +2,9 @@
 # boat-keep: keep a boat sandbox's running processes across fork, stop, reboot and resize.
 #
 #   boat-keep setup <id>                      install CRIU and the boat-keep service on the sandbox
-#   boat-keep fork <id> [-- <boat fork opts>] fork with the processes (--type large resizes)
+#   boat-keep fork <id> [--live] [-- <boat fork opts>]
+#                                             fork with the processes (--type large resizes); --live
+#                                             never stops the source, and waits up to a minute instead
 #   boat-keep stop <id>                       checkpoint, then boat stop
 #   boat-keep resume <id>                     boat resume; a cold resume restores the processes
 #   boat-keep resize <id> <size>              stop, resume at small|default|large|xlarge, restore
@@ -33,20 +35,20 @@ state() { boat info "$1" --json | json_field state; }
 
 wait_stopped() {
   local _
-  for _ in $(seq 90); do [ "$(state "$1")" = stopped ] && return 0; sleep 2; done
+  for _ in $(seq 180); do [ "$(state "$1")" = stopped ] && return 0; sleep 1; done
   die "$1 didn't stop"
 }
 
 # Until the boat-keep service has finished its boot restore, then print its status.
 wait_kept() {
   local _
-  for _ in $(seq 60); do
+  for _ in $(seq 120); do
     # boat ssh prints its errors on stdout, and is-active fails while the boot restore runs.
     if boat ssh "$1" 'systemctl is-active -q boat-keep' >/dev/null 2>&1; then
       agent "$1" status | sed "s/^/$1: /" >&2
       return 0
     fi
-    sleep 2
+    sleep 1
   done
   die "boat-keep didn't start on $1: boat ssh $1 journalctl -u boat-keep"
 }
@@ -92,18 +94,40 @@ case "$cmd" in
     log "saved: boat new --from $2 starts with these processes"
     ;;
   fork)
-    id=${1:-}; [ -n "$id" ] || die "usage: boat-keep fork <id> [-- <boat fork options>]"; shift
+    id=${1:-}; [ -n "$id" ] || die "usage: boat-keep fork <id> [--live] [-- <boat fork options>]"; shift
+    live=; [ "${1:-}" = --live ] && { live=1; shift; }
     [ "${1:-}" = -- ] && shift
     t0=$SECONDS
-    checkpoint "$id"
-    # A fork comes from the latest snapshot; stopping takes one at once (boat snapshot takes ~2 min).
-    boat stop "$id" --json >/dev/null
-    wait_stopped "$id"
-    fork=$(boat fork "$id" "$@" --json | json_field id)
-    boat resume "$id" --json >/dev/null || log "couldn't resume $id: run boat resume $id"
-    [ -n "$fork" ] || die "boat fork failed"
-    wait_kept "$fork"
-    wait_kept "$id"
+    if [ -n "$live" ]; then
+      # boat snapshots a running sandbox about once a minute; fork from the first one after the checkpoint.
+      since=$(boat ssh "$id" 'sudo /usr/local/sbin/boat-keep-agent checkpoint && date -u +%Y-%m-%dT%H:%M:%S.%3NZ') \
+        || die "checkpoint failed on $id"
+      since=$(tail -1 <<< "$since")
+      log "waiting for boat's next snapshot of $id (up to a minute); $id keeps running"
+      snapped=
+      for _ in $(seq 60); do
+        if boat snapshots "$id" --limit 5 --json | python3 -c "import json,sys
+sys.exit(not any(s['status'] == 'completed' and s['createdAt'] > '$since' for s in json.load(sys.stdin)['snapshots']))"; then
+          snapped=1; break
+        fi
+        sleep 2
+      done
+      [ -n "$snapped" ] || die "boat took no snapshot of $id in 2 minutes; fork without --live"
+      fork=$(boat fork "$id" "$@" --json | json_field id)
+      [ -n "$fork" ] || die "boat fork failed"
+      wait_kept "$fork"
+    else
+      checkpoint "$id"
+      # A fork comes from the latest snapshot; stopping takes one at once (boat snapshot takes ~2 min).
+      # The stop's own checkpoint (~/.boat/pre-stop) only adds what changed since the one above.
+      boat stop "$id" --json >/dev/null
+      wait_stopped "$id"
+      fork=$(boat fork "$id" "$@" --json | json_field id)
+      boat resume "$id" --json >/dev/null || log "couldn't resume $id: run boat resume $id"
+      [ -n "$fork" ] || die "boat fork failed"
+      wait_kept "$fork"
+      wait_kept "$id"
+    fi
     log "done in $((SECONDS - t0))s"
     echo "$fork"
     ;;

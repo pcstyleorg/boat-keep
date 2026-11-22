@@ -7,7 +7,7 @@ boat-keep fixes that. It saves the running processes with [CRIU](https://criu.or
 ```sh
 boat-keep setup bx_123              # once per sandbox
 boat ssh bx_123                     # work inside tmux like you normally do
-fork=$(boat-keep fork bx_123)       # about 15 seconds
+fork=$(boat-keep fork bx_123)       # about 20 seconds, even with GBs of memory
 boat ssh -t "$fork" tmux attach     # everything is still running
 ```
 
@@ -29,6 +29,7 @@ Then run `boat-keep setup <sandbox-id>` once. It installs CRIU and a small servi
 | --- | --- |
 | `boat-keep setup <id>` | Install boat-keep on a sandbox |
 | `boat-keep fork <id>` | Fork with everything running. Add `-- --type large` to fork to another size |
+| `boat-keep fork <id> --live` | Same, but the source never stops. Takes up to a minute longer |
 | `boat-keep stop <id>` / `resume <id>` | Stop and resume without losing anything |
 | `boat-keep resize <id> <size>` | Change size in place |
 | `boat-keep save <id> <name>` | Save a snapshot for `boat new --from <name>` |
@@ -44,7 +45,7 @@ import { createBoatKeep } from "boat-keep";
 
 const keep = createBoatKeep({ log: console.log });   // reads BOAT_API_KEY
 await keep.setup("bx_123");
-const fork = await keep.fork("bx_123", { type: "large" });
+const fork = await keep.fork("bx_123", { type: "large" });   // or ({}, { live: true })
 console.log(fork.id, fork.status.fork);
 ```
 
@@ -60,11 +61,11 @@ It also works when you don't use boat-keep's commands:
 - Kernel crash or `boat stop --force`: you get the last automatic save, which happens every 5 minutes.
 - Plain `boat fork` on a running sandbox: same, the last automatic save.
 
-All 16 scenarios were tested on real sandboxes. Results are in [test/RESULTS.md](test/RESULTS.md).
+Every scenario was tested on real sandboxes. Results are in [test/RESULTS.md](test/RESULTS.md).
 
 ## Limits
 
-- `boat-keep fork` pauses the source sandbox for a few seconds.
+- `boat-keep fork` pauses the source sandbox for about 10 seconds. `--live` doesn't, but waits for boat's next background snapshot (up to a minute).
 - Setup turns off io_uring, which CRIU can't save. Some I/O gets a bit slower.
 - Docker containers, GPU and desktop apps aren't supported.
 - Open network connections come back closed.
@@ -82,8 +83,9 @@ A few things took real debugging to get right:
 - **Missing folders.** `/tmp/tmux-1000` doesn't exist after a boot, so restore recreates socket folders first.
 - **Lazy disk on forks.** A new fork serves its disk over FUSE for a few seconds before swapping in the real one. Restore waits for the swap.
 - **PID clashes.** A fresh boot can take a PID a saved process needs, so new PIDs start at 1,000,000.
+- **Big memory.** A fork copies the save onto its disk before restore can read it, at about 120 MB/s. So saves are zstd-compressed (a 2 GB node heap becomes about 210 MB), and after the first full save each one only writes the memory that changed since the last (CRIU `--track-mem`, usually under a few MB in 0.2 s). A 2 GB process went from a 63 s fork to 23 s.
 
-Settings live in `/etc/boat-keep.conf` on the sandbox: `KEEP_USER`, `ROOT` (the process tree to keep, default `tmux: server`) and `INTERVAL` (seconds between saves, default 300).
+Settings live in `/etc/boat-keep.conf` on the sandbox: `KEEP_USER`, `ROOT` (the process tree to keep, default `tmux: server`) `INTERVAL` (seconds between saves, default 300) and `MAX_CHAIN` (incremental saves before the next full one, default 8).
 
 ## Contributing
 

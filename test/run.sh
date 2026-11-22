@@ -4,7 +4,8 @@
 #   test/run.sh            every scenario, results in test/RESULTS.md (about 40 minutes)
 #
 # The workload is the one boat-keep exists for: a tmux session with a node server holding state in
-# memory (a hit counter and a random secret) and a shell with a variable set. Before each event the
+# memory (a hit counter and a random secret), a shell with a variable set, and a 512 MB heap of JS
+# objects (so checkpoints are big enough for compression and incremental checkpoints to matter). Before each event the
 # test asks the server once (hits N); after it, the server must answer with the same pid and secret
 # and hits N+1, so it's the state from right before the event, not an older checkpoint.
 set -uo pipefail
@@ -80,7 +81,8 @@ S=$(track "$(boat new --personal --type small --no-env --name keep-test --ttl 10
 [ -n "$S" ] || exit 1
 "$KEEP" setup "$S"
 boat scp "$HERE/counter.js" "$S:/home/user/counter.js" >/dev/null
-boat ssh "$S" 'tmux new-session -d -s work "node ~/counter.js"; tmux new-window -t work bash; sleep 1
+boat scp "$HERE/heap.js" "$S:/home/user/heap.js" >/dev/null
+boat ssh "$S" 'tmux new-session -d -s work "node ~/counter.js"; tmux new-window -t work bash; tmux new-window -t work "node ~/heap.js 512"; sleep 8
   tmux send-keys -t work:1 "export MARK=still-here" Enter; for i in 1 2; do curl -s localhost:3000 >/dev/null; done'
 first=$(boat ssh "$S" 'curl -s localhost:3000')
 PID=$(field pid <<< "$first"); SECRET=$(field secret <<< "$first")
@@ -88,6 +90,10 @@ echo "workload: pid $PID, secret $SECRET" >&2
 
 log "1 fork"
 before "$S"; F1=$(track "$("$KEEP" fork "$S" -- --no-env)"); check "$F1" "boat-keep fork: the fork"; check "$S" "boat-keep fork: the source"
+
+log "1b live fork: the source never stops"
+before "$S"; F6=$(track "$("$KEEP" fork "$S" --live -- --no-env)"); check "$F6" "boat-keep fork --live: the fork"
+check "$S" "boat-keep fork --live: the source (never stopped)"
 
 log "2 resize (fork small → default)"
 before "$S"; F2=$(track "$("$KEEP" fork "$S" -- --no-env --type default)"); check "$F2" "fork to a bigger size (small → default)"
@@ -146,7 +152,7 @@ wait_up "$F3"; check "$F3" "quit tmux, then reboot" gone
 {
   echo "# boat-keep test results"
   echo
-  echo "$(date -u '+%Y-%m-%d %H:%M UTC'), \`test/run.sh\` on boat.dev, \`small\` sandboxes. Workload: tmux with \`node counter.js\` (pid $PID) and a bash with \`\$MARK\` set. \"hits N → N+1\" means the server kept its memory from right before the event."
+  echo "$(date -u '+%Y-%m-%d %H:%M UTC'), \`test/run.sh\` on boat.dev, \`small\` sandboxes. Workload: tmux with \`node counter.js\` (pid $PID), a bash with \`\$MARK\` set, and \`node heap.js 512\` (a 512 MB heap). \"hits N → N+1\" means the server kept its memory from right before the event."
   echo
   echo "| Scenario | Sandbox | Machine | Server | Shell var | boat-keep at boot | Result |"
   echo "| --- | --- | --- | --- | --- | --- | --- |"

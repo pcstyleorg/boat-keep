@@ -7,6 +7,7 @@ if ! command -v criu >/dev/null; then
   add-apt-repository -y ppa:criu/ppa >/dev/null 2>&1
   DEBIAN_FRONTEND=noninteractive apt-get install -y criu >/dev/null 2>&1
 fi
+command -v zstd >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y zstd >/dev/null 2>&1
 # CRIU can't checkpoint io_uring; with it off, node (libuv) and others use epoll.
 echo kernel.io_uring_disabled=2 > /etc/sysctl.d/99-boat-keep.conf
 sysctl -q -w kernel.io_uring_disabled=2
@@ -14,7 +15,9 @@ sysctl -q -w kernel.io_uring_disabled=2
 install -m 755 "$d/boat-keep-agent" /usr/local/sbin/boat-keep-agent
 install -m 644 "$d/boat-keep.service" /etc/systemd/system/boat-keep.service
 systemctl daemon-reload
-systemctl enable -q --now boat-keep
+systemctl enable -q boat-keep
+# Restart, so a running loop picks up a new agent. The kept processes stay (KillMode=process).
+systemctl restart boat-keep
 # Processes started from now on get PIDs no boot reaches (see raise_pid_counter).
 /usr/local/sbin/boat-keep-agent raise-pids
 

@@ -87,11 +87,27 @@ export function createBoatKeep(options: BoatKeepOptions = {}) {
     /** What is kept, and how the last boot went. */
     status: (id: string) => agent(id, "status"),
 
-    /** Fork with the running processes. Pauses the source for a few seconds. */
-    async fork(id: string, forkRequest: ForkRequest = {}): Promise<ForkResult> {
+    /**
+     * Fork with the running processes. Pauses the source for a few seconds; with `live`, the source
+     * never stops and the fork comes from boat's next background snapshot (up to a minute).
+     */
+    async fork(id: string, forkRequest: ForkRequest = {}, { live = false } = {}): Promise<ForkResult> {
       const t0 = Date.now();
+      if (live) {
+        const since = new Date(await run(id, `sudo ${AGENT} checkpoint >&2 && date -u +%Y-%m-%dT%H:%M:%S.%3NZ`));
+        log(`waiting for boat's next snapshot of ${id}; it keeps running`);
+        await waitFor(`boat took no snapshot of ${id} in 2 minutes; fork without live`, 60, 2000, async () => {
+          const { snapshots } = await api.listSandboxSnapshots({ sandboxId: id, limit: 5 });
+          return snapshots.some((s) => s.status === "completed" && s.createdAt > since) || undefined;
+        });
+        const res = await api.fork({ sandboxId: id, idempotencyKey: randomUUID(), forkRequest });
+        const forkId = res.sandbox?.id ?? res.id ?? fail("boat fork returned no sandbox id");
+        const fork = await waitKept(forkId);
+        return { id: forkId, seconds: Math.round((Date.now() - t0) / 1000), status: { fork, source: await agent(id, "status") } };
+      }
       await agent(id, "checkpoint");
       // A fork comes from the latest snapshot; a stop takes one in seconds (a named snapshot takes minutes).
+      // The stop's own checkpoint (~/.boat/pre-stop) only adds what changed since the one above.
       await stopAndWait(id);
       let forkId: string | undefined;
       try {

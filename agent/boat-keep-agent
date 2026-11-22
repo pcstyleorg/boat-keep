@@ -8,13 +8,14 @@
 #   wait-disk    wait until boat has moved the disk in on a fork or new sandbox
 #
 # Settings in /etc/boat-keep.conf: KEEP_USER (user), ROOT (the tree's root process name,
-# 'tmux: server'), INTERVAL (300).
+# 'tmux: server'), INTERVAL (300), MAX_CHAIN (8).
 set -euo pipefail
 
 STATE=/var/lib/boat-keep
 KEEP_USER=user
 ROOT='tmux: server'
 INTERVAL=300
+MAX_CHAIN=8  # incremental checkpoints before the next full one
 # shellcheck disable=SC1091
 [ -f /etc/boat-keep.conf ] && . /etc/boat-keep.conf
 UNIT_CGROUP=/sys/fs/cgroup/system.slice/boat-keep.service
@@ -87,7 +88,23 @@ checkpoint() {
 
   release_tmux_clients
 
-  local name dir
+  # Incremental: on the boot and tree of the last checkpoint, CRIU writes only the pages changed
+  # since it (the kernel tracks them), and points to it for the rest. A new boot starts a new chain.
+  # Each dump resets that tracking, so it's only safe on top of the last dump, and only if that one
+  # became current: $STATE/tracking names the last dump. CRIU 4.3 can abort on an incremental dump
+  # whose processes differ from the last one's, so a started or exited process means a full one.
+  local name dir prev="" chain=1
+  if [ -e "$STATE/current/meta" ]; then
+    local ROOT_PID ROOT_COMM COUNT BOOT_ID TAKEN CHAIN=1
+    # shellcheck disable=SC1091
+    . "$STATE/current/meta"
+    if [ "$BOOT_ID" = "$(boot_id)" ] && [ "$ROOT_PID" = "$root" ] && [ "$CHAIN" -lt "$MAX_CHAIN" ] &&
+       [ "$(cat "$STATE/tracking" 2>/dev/null)" = "$(readlink "$STATE/current")" ] &&
+       [ "$(sort "$STATE/current/pids" 2>/dev/null)" = "$(sort <<< "$pids")" ]; then
+      prev=$(readlink "$STATE/current")
+      chain=$((CHAIN + 1))
+    fi
+  fi
   name=img-$(date +%s%N)
   dir=$STATE/$name
   mkdir "$dir"
@@ -99,26 +116,50 @@ checkpoint() {
   done | xargs -r -n1 dirname | sort -u | while read -r d; do
     stat -c '%a %u %g %n' "$d"
   done > "$dir/dirs"
-  if ! criu dump -t "$root" -D "$dir" -o dump.log --leave-running \
-      --tcp-established --ext-unix-sk --file-locks; then
+  echo "$name" > "$STATE/tracking"
+  local dump=(criu dump -t "$root" -D "$dir" -o dump.log --leave-running --track-mem
+    --tcp-established --ext-unix-sk --file-locks)
+  if [ -n "$prev" ] && ! "${dump[@]}" --prev-images-dir "../$prev"; then
+    log "incremental checkpoint failed ($(grep -m1 Error "$dir/dump.log")), taking a full one"
+    find "$dir" -mindepth 1 ! -name dirs -delete
+    prev=""; chain=1
+  fi
+  if [ -z "$prev" ] && ! "${dump[@]}"; then
     tail -4 "$dir/dump.log" >&2
     rm -rf "$dir"
     return 4
   fi
+  # A fork copies the checkpoint in before it can restore; process memory compresses ~8x.
+  find "$dir" -name 'pages-*.img' -exec zstd -q --rm -1 -T0 {} +
   {
     printf 'ROOT_PID=%s\n' "$root"
     printf 'ROOT_COMM=%q\n' "$(cat /proc/"$root"/comm)"
     printf 'COUNT=%s\n' "$(echo "$pids" | wc -l | tr -d ' ')"
     printf 'BOOT_ID=%s\n' "$(boot_id)"
     printf 'TAKEN=%s\n' "$(date +%s)"
+    printf 'CHAIN=%s\n' "$chain"
   } > "$dir/meta"
+  echo "$pids" > "$dir/pids"
   sync -f "$dir/meta"
   # Switch with one rename, so a snapshot taken meanwhile holds a whole checkpoint.
   ln -sfn "$name" "$STATE/current.new"
   mv -T "$STATE/current.new" "$STATE/current"
   sync -f "$STATE"
-  find "$STATE" -maxdepth 1 -name 'img-*' ! -name "$name" -exec rm -rf {} +
-  log "checkpointed $(echo "$pids" | wc -l | tr -d ' ') processes under pid $root ($(du -sh "$dir" | cut -f1))"
+  local keep d
+  keep=$(chain "$dir")
+  for d in "$STATE"/img-*; do grep -qxF "$d" <<< "$keep" || rm -rf "$d"; done
+  log "checkpointed $(echo "$pids" | wc -l | tr -d ' ') processes under pid $root" \
+    "($(if [ -n "$prev" ]; then echo "changes: $(du -sh "$dir" | cut -f1)"; else echo "$(du -sh "$dir" | cut -f1) compressed"; fi))"
+}
+
+# A checkpoint's folder and the earlier ones its pages point to.
+chain() {
+  local d=$1
+  while [ -d "$d" ]; do
+    echo "$d"
+    [ -L "$d/parent" ] || break
+    d=$STATE/$(basename "$(readlink "$d/parent")")
+  done
 }
 
 # A fork or `boat new --from` boots with /home/user, /usr, /etc, ... served lazily over FUSE while
@@ -181,9 +222,15 @@ restore_tree() {
   while read -r mode uid gid d; do
     install -d -m "$mode" -o "$uid" -g "$gid" "$d"
   done < "$dir/dirs"
+  local z ok=1
+  for z in $(chain "$dir" | sed 's|$|/pages-*.img.zst|'); do
+    if [ -e "$z" ]; then zstd -q -d -T0 -f "$z" -o "${z%.zst}"; fi
+  done
   # Open TCP connections come back closed: their peers or this machine's address may be gone.
-  if ! criu restore -D "$dir" -o restore.log -d --tcp-established --tcp-close \
-      --ext-unix-sk --file-locks --manage-cgroups=ignore; then
+  criu restore -D "$dir" -o restore.log -d --tcp-established --tcp-close \
+    --ext-unix-sk --file-locks --manage-cgroups=ignore || ok=0
+  for z in $(chain "$dir" | sed 's|$|/pages-*.img.zst|'); do rm -f "${z%.zst}"; done
+  if [ "$ok" = 0 ]; then
     tail -4 "$dir/restore.log" >&2
     echo "restore FAILED, see $dir/restore.log" > "$STATE/last-boot"
     return 4
