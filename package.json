@@ -1,0 +1,33 @@
+{
+  "name": "boat-keep",
+  "version": "0.1.0",
+  "description": "Keep a boat.dev sandbox's running processes across fork, stop, reboot and resize (CRIU)",
+  "bin": {
+    "boat-keep": "boat-keep"
+  },
+  "files": [
+    "boat-keep",
+    "agent/"
+  ],
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "keywords": [
+    "boat",
+    "boat.dev",
+    "criu",
+    "checkpoint-restore",
+    "sandbox",
+    "tmux",
+    "cli"
+  ],
+  "homepage": "https://github.com/pcstyleorg/boat-keep#readme",
+  "bugs": "https://github.com/pcstyleorg/boat-keep/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pcstyleorg/boat-keep.git"
+  },
+  "license": "MIT",
+  "author": "pc-style"
+}
