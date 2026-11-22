@@ -14,12 +14,13 @@ boat ssh -t "$fork" tmux attach
 ## Install
 
 ```sh
-git clone https://github.com/pcstyleorg/boat-keep
-ln -s "$PWD/boat-keep/boat-keep" /usr/local/bin/boat-keep   # or any folder on your PATH
+curl -fsSL https://raw.githubusercontent.com/pcstyleorg/boat-keep/main/install.sh | bash
 boat-keep setup <sandbox-id>
 ```
 
-`boat-keep` finds its `agent/` folder through the symlink, so keep the clone. `setup` installs CRIU and the service on that one sandbox; forks and snapshots of it already have them.
+The installer puts the files in `~/.local/share/boat-keep` and `boat-keep` in `~/.local/bin` (change them with `BOAT_KEEP_DIR` and `BOAT_KEEP_BIN`); run it again to update. `setup` installs CRIU and the service on that one sandbox; forks and snapshots of it already have them.
+
+From a clone instead: `ln -s "$PWD/boat-keep/boat-keep" ~/.local/bin/boat-keep`. It finds its `agent/` folder through the symlink, so keep the clone.
 
 ## Requirements
 

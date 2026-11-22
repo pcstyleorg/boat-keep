@@ -23,8 +23,8 @@ Open a [feature request](https://github.com/pcstyleorg/boat-keep/issues/new?temp
 2. Run the static checks; CI runs the same ones:
 
    ```sh
-   bash -n boat-keep agent/boat-keep-agent agent/install.sh agent/pre-stop test/run.sh
-   shellcheck -S warning boat-keep agent/boat-keep-agent agent/install.sh agent/pre-stop test/run.sh
+   bash -n boat-keep install.sh agent/boat-keep-agent agent/install.sh agent/pre-stop test/run.sh
+   shellcheck -S warning boat-keep install.sh agent/boat-keep-agent agent/install.sh agent/pre-stop test/run.sh
    ```
 
 3. If you changed checkpoint, restore, setup or the fork flow, run the end-to-end test and say which scenarios you ran:
