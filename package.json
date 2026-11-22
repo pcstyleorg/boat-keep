@@ -1,13 +1,22 @@
 {
   "name": "boat-keep",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Keep a boat.dev sandbox's running processes across fork, stop, reboot and resize (CRIU)",
+  "type": "module",
   "bin": {
     "boat-keep": "boat-keep"
   },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
   "files": [
     "boat-keep",
-    "agent/"
+    "agent/",
+    "dist/"
   ],
   "os": [
     "darwin",
@@ -29,5 +38,16 @@
     "url": "git+https://github.com/pcstyleorg/boat-keep.git"
   },
   "license": "MIT",
-  "author": "pc-style"
+  "author": "pc-style",
+  "scripts": {
+    "build": "bun build lib/index.ts --outdir dist --target node --packages external && bunx tsc -p tsconfig.json",
+    "prepublishOnly": "bun run build"
+  },
+  "dependencies": {
+    "@boatdev/sdk": "^1.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "typescript": "^5"
+  }
 }

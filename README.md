@@ -35,6 +35,21 @@ Then run `boat-keep setup <sandbox-id>` once. It installs CRIU and a small servi
 | `boat-keep checkpoint <id>` | Save the processes right now |
 | `boat-keep status <id>` | Show what's kept and how the last boot went |
 
+## From code
+
+The same commands are a library, on top of boat's API ([`@boatdev/sdk`](https://docs.boat.dev/sdks/overview)). It needs a `BOAT_API_KEY` from the boat dashboard instead of the `boat` CLI.
+
+```ts
+import { createBoatKeep } from "boat-keep";
+
+const keep = createBoatKeep({ log: console.log });   // reads BOAT_API_KEY
+await keep.setup("bx_123");
+const fork = await keep.fork("bx_123", { type: "large" });
+console.log(fork.id, fork.status.fork);
+```
+
+It has `setup`, `fork`, `stop`, `resume`, `resize`, `save`, `checkpoint` and `status`, and throws `BoatKeepError` when something fails.
+
 ## What gets kept
 
 Your tmux session and everything running inside it. Start the things you care about in tmux, after setup. Anything outside tmux isn't kept.

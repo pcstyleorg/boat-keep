@@ -4,3 +4,4 @@ stills/
 .render-lock/
 # demo videos and the tooling that renders them, kept locally only
 reel/
+dist/
